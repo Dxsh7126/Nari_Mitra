@@ -1,0 +1,101 @@
+# Phase 1: Kill the Server — Fully On-Device Inference
+
+## What This Does
+Right now the Flutter app records audio → sends it to a Python server on your
+laptop → the server extracts MFCCs and runs the model → sends a score back.
+This requires your laptop + hotspot. After this change, the phone does
+**everything** itself. No laptop, no hotspot, no internet needed.
+
+## How MFCC Works (Plain English)
+1. Record 1 second of audio at 16,000 Hz = 16,000 numbers (samples)
+2. Slice it into overlapping windows of 2048 samples each, stepping 512 at a time → **32 frames**
+3. For each frame: apply FFT → build a Mel filterbank → take logarithm → apply DCT → keep first **40 coefficients**
+4. Result: a (32 × 40) matrix — exactly the shape your CNN was trained on
+5. Normalize: [(value - TRAIN_MEAN) / TRAIN_STD](file:///d:/pyton/Nari_Shakti/flutter_app/lib/main.dart#13-16) using your hardcoded constants
+6. Feed into TFLite on device → get 0–1 score
+
+---
+
+## Proposed Changes
+
+### Flutter App — Dependencies
+#### [MODIFY] [pubspec.yaml](file:///d:/pyton/Nari_Shakti/flutter_app/pubspec.yaml)
+- Add `mfcc: ^1.1.0` — a pure Dart library for MFCC extraction
+
+> [!NOTE]
+> The [mfcc](file:///d:/pyton/Nari_Shakti/server.py#20-33) package is pure Dart (no native dependencies) so it works on both Android and iOS without any extra setup.
+
+---
+
+### Flutter App — Core Logic
+
+#### [NEW] [mfcc_extractor.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/mfcc_extractor.dart)
+New file. Responsible for turning raw WAV bytes → normalized (32×40) MFCC matrix.
+
+Steps inside this file:
+1. Parse WAV header to skip to PCM data
+2. Convert PCM bytes → `List<double>` float samples
+3. Trim or zero-pad to exactly 16,000 samples
+4. Call `MFCC.mfccFeats(signal, 16000, 2048, 512, 2048, 128, 40)`
+   - `windowLength = 2048` → matches librosa `n_fft`
+   - `windowStride = 512` → matches librosa `hop_length`
+   - `fftSize = 2048`
+   - `numFilter = 128` → matches librosa's default Mel filters
+   - `numCoefs = 40` → matches `n_mfcc=40`
+5. Reshape result from flat list → `List<List<double>>` of shape (32, 40)
+6. Trim/pad time axis to exactly 32 frames
+7. Apply normalization: [(x - TRAIN_MEAN) / (TRAIN_STD + 1e-8)](file:///d:/pyton/Nari_Shakti/flutter_app/lib/main.dart#13-16)
+   - `TRAIN_MEAN = -19.785846710205078`
+   - `TRAIN_STD = 145.11888122558594`
+
+#### [MODIFY] [audio_model.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart)
+- Add method `predictFromWavBytes(Uint8List bytes) → Future<double>`
+  - Uses `MFCCExtractor` to get the (32×40) matrix
+  - Reshapes to `[1, 32, 40]` for TFLite
+  - Runs `_interpreter.run(input, output)` directly (already loaded)
+  - Returns the raw float score
+- Keep existing [predictFromAsset](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart#23-44) for JSON-based verification testing
+
+#### [MODIFY] [main.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/main.dart)
+- Remove `import 'package:http/http.dart'` and all HTTP/multipart code
+- After `_recorder.stopRecorder()`, read the WAV file bytes from disk
+- Call `model.predictFromWavBytes(bytes)` instead of the HTTP request
+- Rest of UI (score display, snackbar, threshold logic) stays exactly the same
+
+---
+
+## Verification Plan
+
+### Step 1 — JSON Cross-Check Test (most important)
+You already have [aggressive_mfcc.json](file:///d:/pyton/Nari_Shakti/flutter_app/assets/aggressive_mfcc.json) and [normal_mfcc.json](file:///d:/pyton/Nari_Shakti/flutter_app/assets/normal_mfcc.json) in assets. These
+are real MFCCs computed by librosa on your training data, **already normalized**.
+
+We will add a debug button in the app that:
+1. Loads these JSON files (like the old [predictFromAsset](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart#23-44) method)
+2. Runs TFLite inference on them
+3. Displays the score
+
+**Expected**: aggressive JSON → score > 0.5, normal JSON → score < 0.5
+
+This proves the TFLite model and inference path are working correctly,
+independent of MFCC extraction.
+
+### Step 2 — Build Verification
+```
+cd d:\pyton\Nari_Shakti\flutter_app
+flutter pub get
+flutter build apk --debug
+```
+Both commands should complete with no errors.
+
+### Step 3 — Manual Live Test (requires Android device)
+```
+flutter run
+```
+1. Press **Record & Detect** and speak calmly → score should be low (< 0.5, green)
+2. Press **Record & Detect** and shout angrily → score should be higher (ideally > 0.5, red)
+
+> [!IMPORTANT]
+> The live recording accuracy may not be perfect since the model has only 480
+> training samples. The JSON verification test (Step 1) is the primary proof
+> that the on-device pipeline is correct.

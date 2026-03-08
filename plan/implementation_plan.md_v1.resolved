@@ -1,0 +1,81 @@
+# Fix: False Positive Aggression Detection
+
+## Problem Analysis
+
+The app flags normal / quiet voice as "aggressive". Three root causes were identified:
+
+1. **Weak model** — ~75% validation accuracy on only 480 RAVDESS samples. The model is barely better than random and outputs values near 0.5 for ambiguous audio (which is most real-world audio).
+2. **Domain mismatch** — Trained *exclusively* on RAVDESS studio recordings (professional actors, clean studio). Real phone microphone audio has room acoustics, mic noise, and different vocal characteristics. The model hasn't seen this kind of audio and misbehaves.
+3. **Single-window decision** — One 1-second recording is enough to trigger the alert. Any fluctuation or noise can push the score over the threshold.
+
+## Proposed Changes
+
+### Fix 1 — Temporal Voting (most impactful)
+
+Instead of making a decision from a single 1-second clip, record **3 seconds** and split it into three 1-second windows. Flag aggression only if **at least 2 out of 3** windows score above the threshold. This dramatically reduces false positives with no model changes.
+
+#### [MODIFY] [audio_model.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart)
+- Add `predictFromWavBytesList(List<Uint8List> windows)` to run inference on each window individually and return all scores + a `isAggressive` flag based on majority vote.
+
+#### [MODIFY] [main.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/main.dart)
+- Change recording from 1 second to 3 seconds.
+- After recording, split the WAV into three 1-second windows (by byte offset).
+- Pass each window to the model separately.
+- Label the result *aggressive* only if ≥2/3 windows vote positive.
+- Update UI to show the 3 individual scores plus the verdict.
+
+---
+
+### Fix 2 — Zero Crossing Rate (ZCR) Pre-filter
+
+Aggressive speech and shouting have **much higher** ZCR (rapid sign changes) than calm speech or background noise. Add a ZCR check in [MFCCExtractor](file:///d:/pyton/Nari_Shakti/flutter_app/lib/mfcc_extractor.dart#24-295). If ZCR is too *low* (likely silence or monotone ambient sound) OR too *high* (like broadband noise/hiss), skip inference entirely.
+
+#### [MODIFY] [mfcc_extractor.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/mfcc_extractor.dart)
+- Add `computeZcr(Uint8List wavBytes) → double` static method.
+- ZCR = count of sign changes / (N - 1).
+
+#### [MODIFY] [audio_model.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart)
+- After computing RMS (silence gate), compute ZCR.  
+- Return early with `isSilent: true` if ZCR < 0.01 (pure silence/hum) or ZCR > 0.45 (broadband noise).
+- Add `zcr` field to [PredictionResult](file:///d:/pyton/Nari_Shakti/flutter_app/lib/audio_model.dart#81-92).
+
+> [!NOTE]
+> The ZCR thresholds (0.01 and 0.45) are conservative starting points — they mainly catch edge cases (truly silent recordings, hissed noise). The main guard is the temporal voting.
+
+---
+
+### Fix 3 — Live Score Debug Panel
+
+Add a collapsible debug row in the UI that shows the raw scores for each window. This lets us see what the model is actually outputting in real conditions.
+
+#### [MODIFY] [main.dart](file:///d:/pyton/Nari_Shakti/flutter_app/lib/main.dart)
+- Add `List<double> _windowScores` state.
+- Show the three score bars + individual values below the main result.
+
+---
+
+## What We Are NOT Changing
+
+- The TFLite model itself — retraining requires new real-world recordings.
+- The MFCC extraction pipeline — it already correctly matches librosa.
+- The normalization constants.
+
+## Verification Plan
+
+### Manual Verification (on device)
+1. Run `flutter run` in `d:\pyton\Nari_Shakti\flutter_app`
+2. **Test A — Normal speech**: Press "Record & Detect (3 sec)", speak normally for 3 seconds. Expected: green "✅ Environment Safe", all 3 window scores visible and mostly below threshold.
+3. **Test B — Quiet room / silence**: Press the button and say nothing. Expected: grey "🔇 Too Quiet" message.
+4. **Test C — Aggressive voice**: Shout angrily for 3 seconds. Expected: red "⚠️ Aggression Detected" with ≥2 windows scoring > threshold.
+5. **Test D — Brief noise**: Make a single loud sound and then be quiet. Expected: Only 1 window might score high → green result (voting saves it).
+
+### Existing Verification Tests
+Use the "Test: Aggressive MFCC" / "Test: Normal MFCC" buttons in the app — these feed pre-computed Python MFCCs directly into the model. These should still pass unchanged after our code changes.
+
+### Python Verification
+```bash
+cd d:\pyton\Nari_Shakti
+.venv\Scripts\activate
+python verify_mfcc.py
+```
+Expected: aggressive JSON > 0.5, normal JSON < 0.5, sine wave < 0.5.

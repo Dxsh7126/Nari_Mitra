@@ -208,3 +208,17 @@ __marimo__/
 
 data/
 .venv/
+# Flutter/Dart
+build/
+.dart_tool/
+.flutter-plugins-dependencies
+.packages
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# IDE/editor (optional)
+.idea/
+.vscode/
