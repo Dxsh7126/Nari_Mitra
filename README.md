@@ -402,19 +402,6 @@ Nari_Shakti/
 
 ---
 
-## 👥 Team
-
-| Member | Role |
-|---|---|
-| **Daksh Anand** | ML Engineering, TFLite Edge Integration, Backend Architecture & End-to-End Integration |
-| **Aryan Suvarna** | Project Research, Twilio API Integration & Cloud Deployment |
-| **Riva Khajuria** | UI/UX Design & Flutter Frontend Implementation |
-
-**Supervisor:** Dr. Anamika Dhillon  
-**Institution:** Manipal University Jaipur — Dept. of AI & ML  
-**Programme:** B.Tech CSE (AIML) · AIM2170 PBL-I · 2025–2026
-
----
 
 <div align="center">
 
