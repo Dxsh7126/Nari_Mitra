@@ -11,12 +11,7 @@ Environment Variables Required
     TWILIO_ACCOUNT_SID          — Twilio Account SID (starts with AC...)
     TWILIO_AUTH_TOKEN           — Twilio Auth Token
     TWILIO_FROM_NUMBER          — Your Twilio phone number  e.g. +14155552671
-    EMERGENCY_CONTACT_NUMBER    — Single-number fallback if 'contacts' not sent
 
-Running — Local
----------------
-    pip install flask twilio gunicorn
-    python sos_backend.py
 
 Running — Render (Cloud)
 ------------------------
@@ -56,13 +51,11 @@ Response (4xx / 5xx)
 """
 
 import os
-import time
 import logging
-import threading
-import urllib.request
 from flask import Flask, request, jsonify
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
+from datetime import datetime, timezone
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -74,12 +67,15 @@ log = logging.getLogger("sos_backend")
 
 # ─── App setup ────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-
+SOS_SESSIONS = {}
 # ─── Twilio credentials — always read from environment, never hardcoded ───────
 TWILIO_ACCOUNT_SID       = os.environ.get("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN        = os.environ.get("TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER       = os.environ.get("TWILIO_FROM_NUMBER", "")
 EMERGENCY_CONTACT_NUMBER = os.environ.get("EMERGENCY_CONTACT_NUMBER", "")
+
+#TESTING
+TEST_MODE = os.environ.get("SOS_TEST_MODE", "false").lower() == "true"
 
 
 # ─── TwiML builder ────────────────────────────────────────────────────────────
@@ -155,6 +151,16 @@ def sos():
     """
     data = request.get_json(silent=True) or {}
 
+    session_id = data.get("session_id")
+    location = data.get("location")
+
+    if session_id:
+        SOS_SESSIONS[session_id] = {
+            "session_id":session_id,
+            "created_at":datetime.now(timezone.utc).isoformat(),
+            "status":"Active",
+            "location":location
+        }
     # ── Resolve contact list ──────────────────────────────────────────────────
     # Prefer the new 'contacts' list; fall back to legacy 'to' field, then env.
     contacts: list[str] = data.get("contacts", [])
@@ -182,6 +188,23 @@ def sos():
         "SOS blast triggered — contacts=%s  threat_score=%s  votes=%s",
         contacts, threat_score, votes,
     )
+
+    #TESTING
+    if TEST_MODE:
+        log.info("TEST MODE — no Twilio calls will be placed.")
+        log.info("Session ID: %s", session_id)
+        log.info("Location: %s", location)
+
+        return jsonify({
+            "status": "test_received",
+            "session_id": session_id,
+            "location": location,
+            "contacts_received": contacts,
+            "threat_score": threat_score,
+            "votes": votes,
+            "call_sids": [],
+        }), 200
+
 
     # ── Validate Twilio credentials ───────────────────────────────────────────
     if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER]):
@@ -221,6 +244,21 @@ def sos():
         }), 500
 
 
+@app.route("/track/<session_id>", methods=["GET"])
+def track(session_id):
+    session = SOS_SESSIONS.get(session_id)
+
+    if not session:
+        return jsonify({
+            "status":"error",
+            "message":"SOS session not found",
+        }),404
+
+    return jsonify({
+        "status":"ok",
+        "session":session
+    }),200
+
 # ─── Health check endpoint ────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
@@ -234,68 +272,15 @@ def health():
     }), 200
 
 
-# ─── Ping endpoint (ultra-lightweight — for keepalive only) ───────────────────
+# ─── Ping endpoint — for external uptime monitors ────────────────────────────
+# Point UptimeRobot (or any equivalent service) at GET /ping every 14 minutes
+# to prevent Render free-tier spin-down. Returns immediately with no
+# credential checks or database queries.
 
 @app.route("/ping", methods=["GET"])
 def ping():
-    """
-    Minimal liveness endpoint for the self-ping keepalive thread.
-    Returns immediately with no credential checks or DB queries.
-    Also suitable for external uptime monitors (UptimeRobot, etc.).
-    """
+    """Minimal liveness endpoint for external uptime monitors."""
     return jsonify({"status": "pong"}), 200
-
-
-# ─── Self-ping keepalive — prevents Render free-tier spin-down ────────────────
-#
-# Render Free Tier sends SIGTERM after 15 minutes of zero inbound HTTP traffic.
-# This thread pings /ping every 14 minutes, keeping the process alive.
-# It reads RENDER_EXTERNAL_URL which Render injects automatically — no config
-# needed. On local dev, the env var is absent and the thread simply does not
-# start, so there is zero impact on local workflows.
-
-def _keepalive_loop(ping_url: str, interval: int) -> None:
-    """Background daemon: sleep interval seconds, then GET ping_url. Repeat."""
-    while True:
-        time.sleep(interval)
-        try:
-            with urllib.request.urlopen(ping_url, timeout=10) as resp:
-                log.info("Keepalive ping OK — %s  (HTTP %d)", ping_url, resp.status)
-        except Exception as exc:
-            log.warning("Keepalive ping failed (will retry next cycle): %s", exc)
-
-
-def _start_keepalive() -> None:
-    """
-    Spawn the keepalive daemon thread if RENDER_EXTERNAL_URL is set.
-    Called once at module load time — safe for Gunicorn pre-fork workers
-    because daemon threads are inherited per-worker after fork and each
-    runs its own independent ping cycle.
-    """
-    render_url = os.environ.get("RENDER_EXTERNAL_URL", "").rstrip("/")
-    if not render_url:
-        log.info("RENDER_EXTERNAL_URL not set — keepalive thread not started (local mode).")
-        return
-
-    ping_url  = f"{render_url}/ping"
-    # 14 minutes = 840 seconds (safely under the 15-minute spin-down threshold)
-    interval  = int(os.environ.get("KEEPALIVE_INTERVAL_SECONDS", "840"))
-
-    thread = threading.Thread(
-        target=_keepalive_loop,
-        args=(ping_url, interval),
-        daemon=True,   # dies automatically when the worker receives SIGTERM
-        name="keepalive",
-    )
-    thread.start()
-    log.info(
-        "Keepalive thread started — pinging %s every %d s",
-        ping_url, interval,
-    )
-
-
-# Start keepalive at import time so it runs in every Gunicorn worker.
-_start_keepalive()
 
 
 # ─── Entry point (local dev only) ────────────────────────────────────────────

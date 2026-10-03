@@ -27,6 +27,8 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'services/location_service.dart';
+import 'models/sos_session.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Theme constants
@@ -460,14 +462,51 @@ class _SafetyScreenState extends State<SafetyScreen>
   // ─────────────────────────────────────────────────────────────────────────
 
   Future<void> _fireSos({double? threatScore, int? votes}) async {
+
+    debugPrint('_FIRESOS CALLED');
+    debugPrint('📱 Contact count: ${_contactPhones.length}');
+    debugPrint('📱 Contacts: $_contactPhones');
+
     if (_contactPhones.isEmpty) {
       _showSnack(
         '⚠️ No emergency contacts set! Add contacts first.',
         _kDanger,
         duration: 5,
       );
-      return;
+      debugPrint('CONTINUING SOS WITHOUT CONTACTS');
     }
+    SosSession? session;
+    try{
+      _showSnack('📍 Getting your location...',
+      _kAmber,
+      duration: 3,
+      );
+
+      debugPrint('ABOUT TO REQUEST GPS LOCATION');
+
+      final position = await LocationService.getCurrentPosition();
+      final sessionId = SosService.generateSessionID();
+
+      session = SosSession.fromPosition(sessionId: sessionId, position: position);
+
+      debugPrint('📍 Location obtained');
+      debugPrint('    Latitude: ${position.latitude}');
+      debugPrint('    Longitude: ${position.longitude}');
+      debugPrint('    Accuracy: ${position.accuracy}');
+      debugPrint('    SOS Session: $sessionId');
+    } catch (e){
+      
+      // GPS Failure should not prevent SOS from being sent
+      debugPrint('⚠️ Could not obtain GPS location: $e');
+
+      _showSnack(
+        '⚠️ Location unavailable. Sending SOS without GPS.',
+        _kAmber,
+        duration: 4,
+      );
+    }
+  try{
+    debugPrint('📡 Sending SOS...');
 
     // Pass the ENTIRE contacts list — backend calls every number.
     final result = await SosService.trigger(
@@ -476,6 +515,7 @@ class _SafetyScreenState extends State<SafetyScreen>
       emergencyContactNumbers: _contactPhones,
       threatScore: threatScore,
       votes: votes,
+      session: session,
     );
 
     if (!mounted) return;
@@ -483,12 +523,21 @@ class _SafetyScreenState extends State<SafetyScreen>
     final int n = _contactPhones.length;
     final msg = result.callInitiated
         ? '📞 SOS blasted to $n contact${n > 1 ? 's' : ''}.'
+          '📍 Location captured.'
             '${result.recorderStarted ? ' Evidence recording active.' : ''}'
         : '⚠️ SOS failed: ${result.errorMessage}';
 
     _showSnack(msg, result.callInitiated ? _kPrimary : _kDanger, duration: 6);
-  }
+  
+  } catch (e) {
+      if(!mounted) return;
 
+      debugPrint('❌ SOS error: $e');
+
+      _showSnack('⚠️ Could not get location: $e',_kDanger,duration: 6);
+    }
+  }
+ 
   // ─────────────────────────────────────────────────────────────────────────
   //  Evidence Vault navigation
   // ─────────────────────────────────────────────────────────────────────────

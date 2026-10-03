@@ -1,0 +1,11 @@
+# requirements.txt — Nari Mitra SOS Backend
+# ------------------------------------------
+# Render reads this file automatically during build to install dependencies.
+# Pin minor versions for reproducible deployments; bump intentionally.
+#
+# Install locally:   pip install -r requirements.txt
+# Render start cmd:  gunicorn -w 2 -b 0.0.0.0:$PORT sos_backend:app
+
+Flask==3.1.0
+twilio==9.4.3
+gunicorn==23.0.0

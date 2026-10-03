@@ -30,7 +30,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:flutter_app/models/sos_session.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -92,6 +94,14 @@ class SosService {
   // Private constructor — this is a static utility class.
   SosService._();
 
+  // To get IDs like SOS-1791023456123-483921(change this one security gets implemented)
+  static String generateSessionID(){
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final random = Random().nextInt(999999);
+
+    return 'SOS-$timestamp-$random';
+  }
+
   // ─── Public API ────────────────────────────────────────────────────────────
 
   /// Fire the dual-action SOS:
@@ -120,6 +130,7 @@ class SosService {
   static Future<SosResult> trigger({
     required FlutterSoundRecorder recorder,
     required String sosBackendUrl,
+    SosSession? session,
     List<String> emergencyContactNumbers = const [],
     double? threatScore,
     int? votes,
@@ -131,6 +142,7 @@ class SosService {
         contactNumbers: emergencyContactNumbers,
         threatScore: threatScore,
         votes: votes,
+        session: session,
       ),
       _startStealthRecorder(recorder),
     ]);
@@ -162,14 +174,30 @@ class SosService {
   static Future<_CallOutcome> _dispatchCallBlast({
     required String backendUrl,
     List<String> contactNumbers = const [],
+    SosSession? session,
     double? threatScore,
     int? votes,
   }) async {
     final body = <String, dynamic>{
-      if (contactNumbers.isNotEmpty) 'contacts': contactNumbers,
-      if (threatScore != null) 'threat_score': threatScore,
-      if (votes       != null) 'votes': votes,
-    };
+
+      if (contactNumbers.isNotEmpty) 
+        'contacts': contactNumbers,
+
+      if (threatScore != null) 
+        'threat_score': threatScore,
+
+      if (votes       != null) 
+        'votes': votes,
+
+      if (session != null) ...{
+      'session_id':session.sessionId,
+      'location':{
+        'latitude':session.latitude,
+        'longitude':session.longitude,
+        'accuracy':session.accuracy,
+      },
+    },
+  };
     final encoded = jsonEncode(body);
     final uri     = Uri.parse(backendUrl);
     final headers = {'Content-Type': 'application/json'};
