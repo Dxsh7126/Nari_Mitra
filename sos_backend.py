@@ -141,6 +141,21 @@ def trigger_emergency_call(client: Client, to_number: str) -> str:
 
 # ─── /sos endpoint ────────────────────────────────────────────────────────────
 
+@app.route("/gps-test",methods=["POST"])
+def gps_test():
+    data = request.get_json(silent=True) or {}
+
+    print("\n========== GPS TEST ==========")
+    print(f"🆔 Session ID: {data.get('session_id')}")
+    print(f"📍 Location: {data.get('location')}")
+    print("==============================\n")
+
+    return jsonify({
+        "status":"recieved",
+        "session_id":data.get("session_id"),
+        "location":data.get("location")
+    }),200
+
 @app.route("/sos", methods=["POST"])
 def sos():
     """
@@ -151,14 +166,22 @@ def sos():
     """
     data = request.get_json(silent=True) or {}
 
+    print("\n========== SOS REQUEST ==========")
+    print("📦 Raw data received:")
+    print(data)
+
     session_id = data.get("session_id")
     location = data.get("location")
+
+    print(f"🆔 Session ID: {session_id}")
+    print(f"📍 Location: {location}")
+    print("=================================\n")
 
     if session_id:
         SOS_SESSIONS[session_id] = {
             "session_id":session_id,
             "created_at":datetime.now(timezone.utc).isoformat(),
-            "status":"Active",
+            "status":"active",
             "location":location
         }
     # ── Resolve contact list ──────────────────────────────────────────────────
@@ -265,6 +288,12 @@ def track(session_id):
 def health():
     """Liveness probe. Returns credential readiness status."""
     creds_ok = all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER])
+    log.info(
+        "Credential check — SID=%s TOKEN=%s FROM=%s",
+        bool(TWILIO_ACCOUNT_SID),
+        bool(TWILIO_AUTH_TOKEN),
+        bool(TWILIO_FROM_NUMBER),
+    )
     return jsonify({
         "status":      "ok",
         "credentials": "configured" if creds_ok else "missing",

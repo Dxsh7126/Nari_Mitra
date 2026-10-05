@@ -99,7 +99,7 @@ class _SafetyScreenState extends State<SafetyScreen>
   // TODO: Replace this placeholder with your actual Render URL after deploying.
   //       Find it in: Render Dashboard → your service → URL (top of the page).
   //       Format will be: https://<your-service-name>.onrender.com/sos
-  static const String _sosBackendUrl = 'https://nari-mitra-backend.onrender.com/sos';
+  static const String _sosBackendUrl = 'http://10.147.24.100:5001/sos';
 
   // ── Tunable threshold ────────────────────────────────────────────────────
   double _threshold = 0.85;
