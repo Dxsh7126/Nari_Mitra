@@ -184,6 +184,9 @@ def sos():
             "status":"active",
             "location":location
         }
+
+    log.info("🆔 SOS SESSION CREATED: %s", session_id)
+    log.info("📍 Initial location: %s", location)
     # ── Resolve contact list ──────────────────────────────────────────────────
     # Prefer the new 'contacts' list; fall back to legacy 'to' field, then env.
     contacts: list[str] = data.get("contacts", [])
