@@ -265,6 +265,7 @@ def sos():
     else:
         return jsonify({
             "status":  "error",
+            "session_id": session_id,
             "message": "All calls failed.",
             "failed":  failed,
         }), 500
