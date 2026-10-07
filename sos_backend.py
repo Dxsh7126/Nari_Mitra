@@ -52,7 +52,7 @@ Response (4xx / 5xx)
 
 import os
 import logging
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template_string
 from twilio.rest import Client
 from twilio.twiml.voice_response import VoiceResponse
 from datetime import datetime, timezone
@@ -266,21 +266,611 @@ def sos():
             "failed":  failed,
         }), 500
 
+@app.route("/track/<session_id>",methods=["POST"])
+def update_tracking_location(session_id):
+    """
+        Recieve a new GPS position for an active SOS session.
+    """
 
-@app.route("/track/<session_id>", methods=["GET"])
-def track(session_id):
     session = SOS_SESSIONS.get(session_id)
 
     if not session:
         return jsonify({
             "status":"error",
-            "message":"SOS session not found",
+            "message":"SOS session not found"
         }),404
 
+    if session['status'] != "active":
+        return jsonify({
+            "status":"error",
+            "message":"SOS session is no longer active"
+        }), 410
+
+    data = request.get_json(silent=True) or {}
+
+    location = data.get("location")
+
+    if not location:
+        return jsonify({
+            "status":"error",
+            "message":"Location is required"
+        }), 400
+
+    latitude = location.get("latitude")
+    longitude = location.get("longitude")
+    accuracy = location.get("accuracy")
+
+    if latitude is None and longitude is None:
+        return jsonify({
+            "status":"error",
+            "message":"Longitude and Latitude are required"
+        }), 400
+
+    session["location"] = {
+        "latitude":latitude,
+        "longitude":longitude,
+        "accuracy":accuracy
+    }
+
+    session["last_updated"] = datetime.now(timezone.utc).isoformat()
+
+    log.info(
+        "📍 Location updated — session=%s lat=%s lng=%s accuracy=%s",
+        session_id,
+        latitude,
+        longitude,
+        accuracy,
+    )
+
     return jsonify({
-        "status":"ok",
-        "session":session
-    }),200
+        "status": "location_updated",
+        "session_id": session_id,
+        "location": session["location"],
+        "last_updated": session["last_updated"],
+    }), 200
+
+
+@app.route("/track/<session_id>", methods=["GET"])
+def tracking_page(session_id):
+
+    session = SOS_SESSIONS.get(session_id)
+
+    if not session:
+        return """
+        <!DOCTYPE html>
+        <html>
+        <body style="font-family:Arial;text-align:center;padding:40px;">
+            <h2>❌ SOS session not found</h2>
+            <p>This tracking session may have expired or does not exist.</p>
+        </body>
+        </html>
+        """, 404
+
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+
+        <meta name="viewport"
+            content="width=device-width, initial-scale=1.0">
+
+        <title>Nari Mitra — Live SOS</title>
+
+        <link
+            rel="stylesheet"
+            href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        />
+
+        <style>
+
+            * {
+                box-sizing: border-box;
+            }
+
+            body {
+                margin: 0;
+                font-family: Arial, sans-serif;
+                background: #111;
+                color: white;
+            }
+
+            #header {
+                padding: 14px 16px;
+                background: #b00020;
+            }
+
+            #header h2 {
+                margin: 0;
+                font-size: 19px;
+            }
+
+            #header p {
+                margin: 5px 0 0;
+                font-size: 13px;
+                opacity: 0.9;
+            }
+
+            #map {
+                height: 65vh;
+                width: 100%;
+            }
+
+            #info {
+                background: #181818;
+                padding: 16px;
+            }
+
+            .row {
+                display: flex;
+                justify-content: space-between;
+                padding: 7px 0;
+                border-bottom: 1px solid #333;
+            }
+
+            .label {
+                color: #aaa;
+            }
+
+            .value {
+                font-weight: bold;
+            }
+
+            #status {
+                margin-top: 10px;
+                font-size: 13px;
+                color: #aaa;
+            }
+
+            #navigate {
+                width: 100%;
+                margin-top: 14px;
+                padding: 14px;
+                border: none;
+                border-radius: 8px;
+                background: #1976d2;
+                color: white;
+                font-size: 16px;
+                font-weight: bold;
+            }
+
+            #navigate:disabled {
+                background: #555;
+            }
+
+        </style>
+
+    </head>
+
+    <body>
+
+    <div id="header">
+
+        <h2>🚨 NARI MITRA — SOS ACTIVE</h2>
+
+        <p>
+            Live emergency tracking
+        </p>
+
+    </div>
+
+    <div id="map"></div>
+
+    <div id="info">
+
+        <div class="row">
+            <span class="label">Victim</span>
+            <span class="value" id="victimStatus">
+                Locating...
+            </span>
+        </div>
+
+        <div class="row">
+            <span class="label">Distance</span>
+            <span class="value" id="distance">
+                —
+            </span>
+        </div>
+
+        <div class="row">
+            <span class="label">Direction</span>
+            <span class="value" id="direction">
+                —
+            </span>
+        </div>
+
+        <div class="row">
+            <span class="label">Location accuracy</span>
+            <span class="value" id="accuracy">
+                —
+            </span>
+        </div>
+
+        <div id="status">
+            Getting your location...
+        </div>
+
+        <button id="navigate" disabled>
+            🧭 START NAVIGATION
+        </button>
+
+    </div>
+
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+    </script>
+
+    <script>
+
+    const sessionId = "{{ session_id }}";
+
+    let victimLocation = null;
+    let contactLocation = null;
+
+    let victimMarker = null;
+    let contactMarker = null;
+    let routeLine = null;
+
+
+    // --------------------------------------------------
+    // MAP
+    // --------------------------------------------------
+
+    const map = L.map("map").setView(
+        [20.5937, 78.9629],
+        5
+    );
+
+    L.tileLayer(
+        "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+        {
+            maxZoom: 19,
+            attribution: "&copy; OpenStreetMap contributors"
+        }
+    ).addTo(map);
+
+
+    // --------------------------------------------------
+    // VICTIM LOCATION
+    // --------------------------------------------------
+
+    async function updateVictimLocation() {
+
+        try {
+
+            const response = await fetch(
+                `/track/${sessionId}/location`
+            );
+
+            const data = await response.json();
+
+            if (data.status !== "active") {
+
+                document.getElementById("status").innerText =
+                    "⚠️ SOS session is no longer active.";
+
+                return;
+            }
+
+            if (!data.location) {
+                return;
+            }
+
+            victimLocation = {
+                latitude: data.location.latitude,
+                longitude: data.location.longitude,
+                accuracy: data.location.accuracy
+            };
+
+            document.getElementById("victimStatus").innerText =
+                "LIVE";
+
+            document.getElementById("accuracy").innerText =
+                data.location.accuracy
+                    ? `±${data.location.accuracy.toFixed(1)} m`
+                    : "Unknown";
+
+
+            const latLng = [
+                victimLocation.latitude,
+                victimLocation.longitude
+            ];
+
+
+            if (!victimMarker) {
+
+                victimMarker = L.marker(latLng)
+                    .addTo(map)
+                    .bindPopup("🚨 Victim");
+
+                map.setView(latLng, 16);
+
+            } else {
+
+                victimMarker.setLatLng(latLng);
+
+            }
+
+            calculateNavigation();
+
+        } catch (error) {
+
+            console.error(
+                "Victim location error:",
+                error
+            );
+
+        }
+    }
+
+
+    // --------------------------------------------------
+    // CONTACT LOCATION
+    // --------------------------------------------------
+
+    function startContactTracking() {
+
+        if (!navigator.geolocation) {
+
+            document.getElementById("status").innerText =
+                "❌ Your browser does not support GPS.";
+
+            return;
+        }
+
+
+        navigator.geolocation.watchPosition(
+
+            function(position) {
+
+                contactLocation = {
+
+                    latitude: position.coords.latitude,
+
+                    longitude: position.coords.longitude
+                };
+
+
+                const latLng = [
+                    contactLocation.latitude,
+                    contactLocation.longitude
+                ];
+
+
+                if (!contactMarker) {
+
+                    contactMarker = L.marker(latLng)
+                        .addTo(map)
+                        .bindPopup("👤 You");
+
+                } else {
+
+                    contactMarker.setLatLng(latLng);
+
+                }
+
+
+                document.getElementById("status").innerText =
+                    "📍 Your location is being tracked for navigation.";
+
+
+                calculateNavigation();
+
+            },
+
+            function(error) {
+
+                console.error(
+                    "Contact GPS error:",
+                    error
+                );
+
+                document.getElementById("status").innerText =
+                    "⚠️ Please allow location access to enable navigation.";
+
+            },
+
+            {
+                enableHighAccuracy: true,
+                maximumAge: 5000,
+                timeout: 10000
+            }
+
+        );
+
+    }
+
+
+    // --------------------------------------------------
+    // DISTANCE
+    // --------------------------------------------------
+
+    function calculateDistance(
+        lat1,
+        lon1,
+        lat2,
+        lon2
+    ) {
+
+        const R = 6371000;
+
+        const dLat =
+            (lat2 - lat1) * Math.PI / 180;
+
+        const dLon =
+            (lon2 - lon1) * Math.PI / 180;
+
+
+        const a =
+            Math.sin(dLat / 2) ** 2 +
+            Math.cos(lat1 * Math.PI / 180) *
+            Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLon / 2) ** 2;
+
+
+        const c =
+            2 * Math.atan2(
+                Math.sqrt(a),
+                Math.sqrt(1 - a)
+            );
+
+
+        return R * c;
+
+    }
+
+
+    // --------------------------------------------------
+    // BEARING
+    // --------------------------------------------------
+
+    function calculateBearing(
+        lat1,
+        lon1,
+        lat2,
+        lon2
+    ) {
+
+        const φ1 = lat1 * Math.PI / 180;
+        const φ2 = lat2 * Math.PI / 180;
+
+        const Δλ =
+            (lon2 - lon1) * Math.PI / 180;
+
+
+        const y =
+            Math.sin(Δλ) * Math.cos(φ2);
+
+        const x =
+            Math.cos(φ1) * Math.sin(φ2) -
+            Math.sin(φ1) *
+            Math.cos(φ2) *
+            Math.cos(Δλ);
+
+
+        let bearing =
+            Math.atan2(y, x) * 180 / Math.PI;
+
+
+        bearing = (bearing + 360) % 360;
+
+        return bearing;
+
+    }
+
+
+    function bearingToDirection(bearing) {
+
+        const directions = [
+            "N",
+            "NE",
+            "E",
+            "SE",
+            "S",
+            "SW",
+            "W",
+            "NW"
+        ];
+
+        return directions[
+            Math.round(bearing / 45) % 8
+        ];
+
+    }
+
+
+    // --------------------------------------------------
+    // NAVIGATION
+    // --------------------------------------------------
+
+    function calculateNavigation() {
+
+        if (!victimLocation || !contactLocation) {
+            return;
+        }
+
+
+        const distance = calculateDistance(
+
+            contactLocation.latitude,
+            contactLocation.longitude,
+
+            victimLocation.latitude,
+            victimLocation.longitude
+
+        );
+
+
+        const bearing = calculateBearing(
+
+            contactLocation.latitude,
+            contactLocation.longitude,
+
+            victimLocation.latitude,
+            victimLocation.longitude
+
+        );
+
+
+        document.getElementById("distance").innerText =
+            distance < 1000
+                ? `${Math.round(distance)} m`
+                : `${(distance / 1000).toFixed(2)} km`;
+
+
+        document.getElementById("direction").innerText =
+            `${bearingToDirection(bearing)} (${Math.round(bearing)}°)`;
+
+
+        document.getElementById("navigate").disabled = false;
+
+    }
+
+
+    // --------------------------------------------------
+    // INITIALIZATION
+    // --------------------------------------------------
+
+        startContactTracking();
+
+        updateVictimLocation();
+
+
+        // Victim updates every 5 seconds on the webpage.
+        // The victim phone itself is sending every ~10 seconds.
+
+        setInterval(
+            updateVictimLocation,
+            5000
+        );
+
+        </script>
+
+        </body>
+        </html>
+        """, session_id=session_id)
+
+@app.route("/track/<session_id>/location",methods=["GET"])
+def get_tracking_location(session_id):
+    session = SOS_SESSIONS.get(session_id)
+
+    if not session:
+        return jsonify({
+            "status": "error",
+            "message": "SOS session not found."
+        }), 404
+
+    if session["status"] != "active":
+        return jsonify({
+            "status": "ended",
+            "location": session.get("location"),
+        }), 200
+
+    return jsonify({
+        "status": "active",
+        "session_id": session_id,
+        "location": session.get("location"),
+        "last_updated": session.get("last_updated"),
+    }), 200
 
 # ─── Health check endpoint ────────────────────────────────────────────────────
 
