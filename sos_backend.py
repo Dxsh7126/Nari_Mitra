@@ -164,7 +164,18 @@ def sos():
     each number concurrently (sequential loop — Twilio handles concurrency
     on its end), and returns all call SIDs.
     """
+
+    log.warning("🔥🔥🔥 NEW SOS CODE VERSION 2026-10-08 🔥🔥🔥")
+
     data = request.get_json(silent=True) or {}
+
+    log.warning("📦 SOS DATA = %s", data)
+
+    session_id = data.get("session_id")
+    location = data.get("location")
+
+    log.warning("🆔 RECEIVED SESSION ID = %r", session_id)
+    log.warning("📍 RECEIVED LOCATION = %r", location)
 
     print("\n========== SOS REQUEST ==========")
     print("📦 Raw data received:")
