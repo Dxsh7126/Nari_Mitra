@@ -259,6 +259,7 @@ def sos():
     if call_sids:
         return jsonify({
             "status":    "calls_initiated",
+            "session_id": session_id,
             "call_sids": call_sids,
             "failed":    failed,
         }), 200
