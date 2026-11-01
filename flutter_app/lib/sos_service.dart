@@ -36,6 +36,7 @@ import 'package:flutter_app/models/sos_session.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:geolocator/geolocator.dart';
 
 // ─── Result types ─────────────────────────────────────────────────────────────
 
@@ -94,6 +95,16 @@ class SosService {
   // Private constructor — this is a static utility class.
   SosService._();
 
+  // Live Location Tracking
+
+  static Timer? _trackingTimer;
+  static String? _activeSessionId;
+  static String? _trackingBackendUrl;
+
+  static bool _isSendingLocation = false;
+
+  static const Duration _trackingInterval = Duration(seconds: 10);
+
   // To get IDs like SOS-1791023456123-483921(change this one security gets implemented)
   static String generateSessionID(){
     final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -149,6 +160,16 @@ class SosService {
 
     final callResult     = results[0] as _CallOutcome;
     final recorderResult = results[1] as _RecorderOutcome;
+
+    // Start live tracking after successful SOS dispatch
+    if (callResult.success && session != null){
+      final backendBaseUrl = _getBackendBaseUrl(sosBackendUrl);
+
+      startLocationTracking(
+        sessionId: session.sessionId,
+        backendUrl: backendBaseUrl,
+      );
+    }
 
     final errors = <String>[
       if (callResult.error     != null) 'Call: ${callResult.error}',
@@ -295,6 +316,113 @@ class SosService {
     } catch (_) {
       // Ignore stop errors — recorder may have been closed externally.
     }
+  }
+
+  static void startLocationTracking({
+    required String sessionId,
+    required String backendUrl,
+  }) {
+    stopLocationTracking();
+
+    _activeSessionId = sessionId;
+    _trackingBackendUrl = backendUrl;
+
+    print('📍 Starting live location tracking');
+    print('🆔 Session: $sessionId');
+    print('🌐 Backend: $backendUrl');
+
+    // Send first update immediately
+    unawaited(_sendLocationUpdate());
+
+    // Continue sending updates every 10sec
+    _trackingTimer = Timer.periodic(
+      _trackingInterval,
+      (_) {
+        unawaited(_sendLocationUpdate());
+      },
+    );
+  }
+
+  //Get fresh GPS coords and send to flask
+
+  static Future<void> _sendLocationUpdate() async {
+    if (_isSendingLocation) return;
+
+    final sessionId = _activeSessionId;
+    final backendUrl = _trackingBackendUrl;
+
+    if (sessionId == null || backendUrl == null) return;
+
+    _isSendingLocation = true;
+
+    try{
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      final uri = Uri.parse(
+        '$backendUrl/track/$sessionId',
+      );
+
+      final body = jsonEncode({
+        'location': {
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'accuracy': position.accuracy,
+        },
+      });
+
+      final response = await http.post(
+        uri,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body:body,
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200){
+        print(
+          '📍 Location updated: '
+          '${position.latitude}. ${position.longitude}'
+          '(±${position.accuracy.toStringAsFixed(1)}m)',
+        );
+      } else {
+        print(
+          '⚠️ Location update failed: '
+          '${response.statusCode} ${response.body}',
+        );
+      }
+    } catch (e) {
+      print('⚠️ Location tracking error: $e');
+    } finally {
+      _isSendingLocation = false;
+    }
+  }
+
+  // Stop periodic GPS tracking
+  static void stopLocationTracking(){
+    _trackingTimer?.cancel();
+    _trackingTimer = null;
+
+    _activeSessionId = null;
+    _trackingBackendUrl = null;
+
+    print('🛑 Live location tracking stopped');
+  }
+
+  static String _getBackendBaseUrl(String sosBackendUrl){
+    final uri = Uri.parse(sosBackendUrl);
+
+    final path = uri.path.replaceFirst(
+      RegExp(r'/sos/?$'), '',);
+
+    return uri.replace(
+      path: path,
+      query: null,
+      fragment: null,
+    ).toString().replaceFirst(RegExp(r'/$'),'');
   }
 }
 

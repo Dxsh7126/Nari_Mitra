@@ -99,7 +99,7 @@ class _SafetyScreenState extends State<SafetyScreen>
   // TODO: Replace this placeholder with your actual Render URL after deploying.
   //       Find it in: Render Dashboard → your service → URL (top of the page).
   //       Format will be: https://<your-service-name>.onrender.com/sos
-  static const String _sosBackendUrl = 'http://10.147.24.100:5001/sos';
+  static const String _sosBackendUrl = 'https://nari-mitra-backend.onrender.com/sos';
 
   // ── Tunable threshold ────────────────────────────────────────────────────
   double _threshold = 0.85;
@@ -494,6 +494,12 @@ class _SafetyScreenState extends State<SafetyScreen>
       debugPrint('    Longitude: ${position.longitude}');
       debugPrint('    Accuracy: ${position.accuracy}');
       debugPrint('    SOS Session: $sessionId');
+
+      debugPrint('🆔 SOS SESSION ID: $sessionId');
+      debugPrint(
+        '🔗 TRACKING URL: '
+        'https://nari-mitra-backend.onrender.com/track/$sessionId',
+      );
     } catch (e){
       
       // GPS Failure should not prevent SOS from being sent
