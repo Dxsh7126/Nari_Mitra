@@ -426,6 +426,34 @@ def tracking_page(session_id):
         />
 
         <style>
+            
+            #instructions {
+                background: #202020;
+                padding: 16px;
+                max-height: 260px;
+                overflow-y: auto;
+            }
+
+            #instructions h3 {
+                margin: 0 0 12px;
+                font-size: 17px;
+            }
+
+            .direction-step {
+                padding: 12px 8px;
+                border-bottom: 1px solid #444;
+            }
+
+            .direction-step strong {
+                display: block;
+                font-size: 15px;
+            }
+
+            .direction-step small {
+                display: block;
+                color: #aaa;
+                margin-top: 5px;
+            }
 
             * {
                 box-sizing: border-box;
@@ -518,6 +546,12 @@ def tracking_page(session_id):
     </div>
 
     <div id="map"></div>
+    <div id="instructions">
+        <h3>🧭 Turn-by-turn directions</h3>
+        <div id="stepsList">
+            <p>Start navigation to see directions.</p>
+        </div>
+    </div>
 
     <div id="info">
 
@@ -930,7 +964,108 @@ def tracking_page(session_id):
         document.getElementById("navigate").disabled = false;
 
     }
+    function formatDistance(meters) {
+        if (meters < 1000) {
+            return `${Math.round(meters)} m`;
+        }
 
+        return `${(meters / 1000).toFixed(2)} km`;
+    }
+
+
+    function getManeuverInstruction(maneuver) {
+        const type = maneuver.type;
+        const modifier = maneuver.modifier || "";
+
+        const directions = {
+            left: "Turn left",
+            right: "Turn right",
+            "slight left": "Turn slightly left",
+            "slight right": "Turn slightly right",
+            "sharp left": "Turn sharply left",
+            "sharp right": "Turn sharply right",
+            straight: "Continue straight",
+            uturn: "Make a U-turn"
+        };
+
+        if (type === "depart") {
+            return "Start your journey";
+        }
+
+        if (type === "arrive") {
+            return "You have arrived at your destination";
+        }
+
+        if (type === "roundabout" || type === "rotary") {
+            return maneuver.exit
+                ? `Enter the roundabout and take exit ${maneuver.exit}`
+                : "Enter the roundabout";
+        }
+
+        if (type === "merge") {
+            return "Merge";
+        }
+
+        if (type === "on ramp") {
+            return "Take the entrance ramp";
+        }
+
+        if (type === "off ramp") {
+            return "Take the exit ramp";
+        }
+
+        if (type === "fork") {
+            return directions[modifier] || "Continue at the fork";
+        }
+
+        if (type === "end of road") {
+            return directions[modifier] || "Continue at the end of the road";
+        }
+
+        if (type === "new name" || type === "continue") {
+            return "Continue straight";
+        }
+
+        return directions[modifier] || "Continue";
+    }
+
+
+    function renderRouteInstructions(steps) {
+        const container = document.getElementById("stepsList");
+
+        container.innerHTML = "";
+
+        if (!steps || steps.length === 0) {
+            container.innerText = "No turn-by-turn instructions available.";
+            return;
+        }
+
+        steps.forEach((step, index) => {
+            const maneuver = step.maneuver;
+
+            const instruction = getManeuverInstruction(maneuver);
+
+            const roadName = step.name
+                ? `Onto ${step.name}`
+                : "Unnamed road";
+
+            const distance = formatDistance(step.distance);
+
+            const item = document.createElement("div");
+            item.className = "direction-step";
+
+            const title = document.createElement("strong");
+            title.innerText = `${index + 1}. ${instruction}`;
+
+            const details = document.createElement("small");
+            details.innerText = `${roadName} · ${distance}`;
+
+            item.appendChild(title);
+            item.appendChild(details);
+
+            container.appendChild(item);
+        });
+    }
     async function startNavigation() {
 
         if (!victimLocation || !contactLocation){
@@ -972,6 +1107,11 @@ def tracking_page(session_id):
             }
 
             const route = data.routes[0];
+            // Extract turn-by-turn instructions from OSRM
+            const steps = route.legs.flatMap(leg => leg.steps);
+
+            // Display the instructions
+            renderRouteInstructions(steps);
 
             const coordinates = route.geometry.coordinates.map(
                 point => [point[1], point[0]]
