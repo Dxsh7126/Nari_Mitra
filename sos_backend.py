@@ -138,6 +138,35 @@ def trigger_emergency_call(client: Client, to_number: str) -> str:
     log.info("Call initiated — SID: %s  →  %s", call.sid, to_number)
     return call.sid
 
+def trigger_emergency_sms(client, to_number, session_id):
+    """Send an SOS alert with a live tracking link."""
+
+    if session_id:
+        tracking_url = (
+            f"https://nari-mitra-backend.onrender.com/track/{session_id}"
+        )
+
+        message_body = (
+            "NARI MITRA EMERGENCY ALERT\n\n"
+            "Your trusted contact may be in danger.\n\n"
+            "Track their live location:\n"
+            f"{tracking_url}\n\n"
+            "Please check on them immediately."
+        )
+    else:
+        message_body = (
+            "NARI MITRA EMERGENCY ALERT\n\n"
+            "Your trusted contact may be in danger.\n"
+            "Live location is currently unavailable.\n\n"
+            "Please check on them immediately."
+        )
+
+    return client.messages.create(
+        body=message_body,
+        from_=TWILIO_FROM_NUMBER,
+        to=to_number,
+    )
+
 
 # ─── /sos endpoint ────────────────────────────────────────────────────────────
 
@@ -258,6 +287,9 @@ def sos():
     call_sids: list[str] = []
     failed:    list[dict] = []
 
+    sms_sids = []
+    sms_failed = []
+
     for number in contacts:
         try:
             sid = trigger_emergency_call(client, number)
@@ -266,6 +298,19 @@ def sos():
             log.error("Failed to call %s: %s", number, exc)
             failed.append({"number": number, "error": str(exc)})
 
+        try:
+            sms = trigger_emergency_sms(client=client, to_number=number, session_id=session_id)
+            sms_sids.append(sms.sid)
+            app.logger.info("SMS queued for %s: %s",number,sms.sid)
+
+        except Exception as exc:
+            sms_failed.append({
+                "number":number,
+                "error":str(exc)
+            })
+
+            app.logger.error("SMS failed for %s: %s",number,exc)
+
     # ── Response ──────────────────────────────────────────────────────────────
     if call_sids:
         return jsonify({
@@ -273,6 +318,8 @@ def sos():
             "session_id": session_id,
             "call_sids": call_sids,
             "failed":    failed,
+            "sms_sids": sms_sids,
+            "sms_failed": sms_failed,
         }), 200
     else:
         return jsonify({
@@ -280,6 +327,7 @@ def sos():
             "session_id": session_id,
             "message": "All calls failed.",
             "failed":  failed,
+            "sms_failed": sms_failed,
         }), 500
 
 @app.route("/track/<session_id>",methods=["POST"])
