@@ -525,6 +525,14 @@ def tracking_page(session_id):
     let victimMarker = null;
     let contactMarker = null;
     let routeLine = null;
+    
+    let navigationStarted = false;
+    let routeRequestInProgress = false;
+    
+    let lastRoutedVictim = null;
+    let lastRoutedContact = null;
+    
+    const REROUTE_DISTANCE_METERS = 30;
 
     const victimIcon = L.divIcon({
         className: "",
@@ -636,6 +644,7 @@ def tracking_page(session_id):
 
             }
 
+            calculateNavigation();
             checkForRerouting();
 
         } catch (error) {
@@ -696,20 +705,13 @@ def tracking_page(session_id):
 
                 }
 
-                let navigationStarted = false;
-                let routeRequestInProgress = false;
-
-                let lastRoutedVictim = null;
-                let lastRouteContact = null;
-
-                const REROUTE_DISTANCE_METERS = 30;
-
 
                 document.getElementById("status").innerText =
                     "📍 Your location is being tracked for navigation.";
 
 
                 calculateNavigation();
+                checkForRerouting();
 
             },
 
