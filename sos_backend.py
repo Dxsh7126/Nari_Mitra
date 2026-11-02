@@ -636,7 +636,7 @@ def tracking_page(session_id):
 
             }
 
-            calculateNavigation();
+            checkForRerouting();
 
         } catch (error) {
 
@@ -695,6 +695,14 @@ def tracking_page(session_id):
                     contactMarker.setLatLng(latLng);
 
                 }
+
+                let navigationStarted = false;
+                let routeRequestInProgress = false;
+
+                let lastRoutedVictim = null;
+                let lastRouteContact = null;
+
+                const REROUTE_DISTANCE_METERS = 30;
 
 
                 document.getElementById("status").innerText =
@@ -873,11 +881,144 @@ def tracking_page(session_id):
 
     }
 
+    async function startNavigation() {
+
+        if (!victimLocation || !contactLocation){
+            document.getElementById("status").innerText =
+                "Waiting for both GPS locations.";
+                
+            return;
+        }
+        if (routeRequestInProgress) return;
+
+        routeRequestInProgress = true;
+
+        const button = document.getElementById("navigate");
+
+        button.disabled = true;
+        button.innerText = "CALCULATING ROUTE...";
+
+        document.getElementById("status").innerText =
+            "Finding the best road route...";
+
+        try {
+
+            const url =
+                `https://router.project-osrm.org/route/v1/driving/` +
+                `${contactLocation.longitude},${contactLocation.latitude};` +
+                `${victimLocation.longitude},${victimLocation.latitude}` +
+                `?overview=full&geometries=geojson&steps=true`;
+
+            const response = await fetch(url);
+
+            if (!response.ok) {
+                throw new Error("Routing service unavailable.");
+            }
+
+            const data = await response.json();
+
+            if (data.code !== "Ok" || !data.routes.length) {
+                throw new Error("No road route found.");
+            }
+
+            const route = data.routes[0];
+
+            const coordinates = route.geometry.coordinates.map(
+                point => [point[1], point[0]]
+            );
+
+            // Remove the previous route.
+            if (routeLine) {
+                map.removeLayer(routeLine);
+            }
+
+            // Draw the new road route.
+            routeLine = L.polyline(coordinates, {
+                color: "#00c853",
+                weight: 6,
+                opacity: 0.85
+            }).addTo(map);
+
+            // Remember the positions used for this route.
+            lastRoutedVictim = {...victimLocation};
+            lastRoutedContact = {...contactLocation};
+
+            navigationStarted = true;
+
+            // Zoom to show the complete route.
+            map.fitBounds(routeLine.getBounds(), {
+                padding: [35, 35]
+            });
+
+            const distanceKm = route.distance / 1000;
+            const durationMinutes = Math.ceil(route.duration / 60);
+
+            document.getElementById("status").innerText =
+                `Navigation active · ${distanceKm.toFixed(2)} km · ` +
+                `${durationMinutes} min`;
+
+            button.disabled = false;
+            button.innerText = "RECALCULATE ROUTE";
+
+        } catch (error) {
+
+            console.error("Navigation error:", error);
+
+            document.getElementById("status").innerText =
+                "Unable to calculate route. Please try again.";
+
+            button.disabled = false;
+            button.innerText = "START NAVIGATION";
+
+        } finally {
+            routeRequestInProgress = false;
+        }
+    }
+
+    
+function checkForRerouting() {
+
+    if (!navigationStarted) return;
+
+    if (
+        !victimLocation ||
+        !contactLocation ||
+        !lastRoutedVictim ||
+        !lastRoutedContact
+    ) {
+        return;
+    }
+
+    const victimMovement = calculateDistance(
+        lastRoutedVictim.latitude,
+        lastRoutedVictim.longitude,
+        victimLocation.latitude,
+        victimLocation.longitude
+    );
+
+    const contactMovement = calculateDistance(
+        lastRoutedContact.latitude,
+        lastRoutedContact.longitude,
+        contactLocation.latitude,
+        contactLocation.longitude
+    );
+
+    if (
+        victimMovement >= REROUTE_DISTANCE_METERS ||
+        contactMovement >= REROUTE_DISTANCE_METERS
+    ) {
+        console.log("🔄 Significant movement detected. Rerouting...");
+
+        startNavigation();
+    }
+}
+
+
 
     // --------------------------------------------------
     // INITIALIZATION
     // --------------------------------------------------
-
+        document.getElementById("navigate").addEventListener("click",startNavigation);
         startContactTracking();
 
         updateVictimLocation();
