@@ -316,7 +316,7 @@ def update_tracking_location(session_id):
     longitude = location.get("longitude")
     accuracy = location.get("accuracy")
 
-    if latitude is None and longitude is None:
+    if latitude is None or longitude is None:
         return jsonify({
             "status":"error",
             "message":"Longitude and Latitude are required"
@@ -526,6 +526,34 @@ def tracking_page(session_id):
     let contactMarker = null;
     let routeLine = null;
 
+    const victimIcon = L.divIcon({
+        className: "",
+        html: `<div style="
+            background:#e53935;
+            width:22px;
+            height:22px;
+            border:3px solid white;
+            border-radius:50%;
+            box-shadow:0 2px 6px #555;
+        "></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+    });
+
+    const contactIcon = L.divIcon({
+        className: "",
+        html: `<div style="
+            background:#1976d2;
+            width:22px;
+            height:22px;
+            border:3px solid white;
+            border-radius:50%;
+            box-shadow:0 2px 6px #555;
+        "></div>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11]
+    });
+
 
     // --------------------------------------------------
     // MAP
@@ -594,7 +622,9 @@ def tracking_page(session_id):
 
             if (!victimMarker) {
 
-                victimMarker = L.marker(latLng)
+                victimMarker = L.marker(latLng, {
+                    icon: victimIcon
+                })
                     .addTo(map)
                     .bindPopup("🚨 Victim");
 
@@ -654,7 +684,9 @@ def tracking_page(session_id):
 
                 if (!contactMarker) {
 
-                    contactMarker = L.marker(latLng)
+                    contactMarker = L.marker(latLng, {
+                        icon: contactIcon
+                    })
                         .addTo(map)
                         .bindPopup("👤 You");
 

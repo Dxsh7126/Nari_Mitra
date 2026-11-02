@@ -161,15 +161,27 @@ class SosService {
     final callResult     = results[0] as _CallOutcome;
     final recorderResult = results[1] as _RecorderOutcome;
 
+    print('========== SOS TRACKING DEBUG ==========');
+    print('Call success: ${callResult.success}');
+    print('Session exists: ${session != null}');
+    print('Session ID: ${session?.sessionId}');
+    print('========================================');
+
     // Start live tracking after successful SOS dispatch
     if (callResult.success && session != null){
       final backendBaseUrl = _getBackendBaseUrl(sosBackendUrl);
+      
+      print('🚀 STARTING LOCATION TRACKING');
+      print('🆔 SESSION: ${session.sessionId}');
+      print('🌐 URL: $backendBaseUrl');
 
       startLocationTracking(
         sessionId: session.sessionId,
         backendUrl: backendBaseUrl,
       );
-    }
+    }else {
+    print('❌ LOCATION TRACKING NOT STARTED');
+  }
 
     final errors = <String>[
       if (callResult.error     != null) 'Call: ${callResult.error}',
@@ -354,7 +366,7 @@ class SosService {
     if (sessionId == null || backendUrl == null) return;
 
     _isSendingLocation = true;
-
+    print('⏳ REQUESTING FRESH GPS LOCATION');
     try{
       final position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
@@ -373,7 +385,12 @@ class SosService {
           'accuracy': position.accuracy,
         },
       });
-
+      print('📍 GPS RECEIVED');
+      print('Latitude: ${position.latitude}');
+      print('Longitude: ${position.longitude}');
+      print('📤 SENDING LOCATION TO FLASK');
+      print('URL: $uri');
+      
       final response = await http.post(
         uri,
         headers: {

@@ -218,6 +218,7 @@ build/
 .venv/
 __pycache__/
 *.pyc
+script.py
 
 # IDE/editor (optional)
 .idea/
